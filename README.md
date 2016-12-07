@@ -1,4 +1,4 @@
-# Secure-fasthttp [![GoDoc](https://godoc.org/github.com/mithorium/secure-fasthttp?status.svg)](http://godoc.org/github.com/mithorium/secure-fasthttp) [![Build Status](https://travis-ci.org/mithorium/secure-fasthttp.svg)](https://travis-ci.org/mithorium/secure-fasthttp)
+# Secure-fasthttp [![GoDoc](https://godoc.org/github.com/Mithorium/secure-fasthttp?status.svg)](http://godoc.org/github.com/Mithorium/secure-fasthttp) [![Build Status](https://travis-ci.org/Mithorium/secure-fasthttp.svg)](https://travis-ci.org/Mithorium/secure-fasthttp)
 
 Secure-fasthttp is a HTTP middleware for Go forked from [unrolled/secure](https://github.com/unrolled/secure) that facilitates some quick security wins. It is meant to be used with [valyala/fasthttp](https://github.com/valyala/fasthttp).
 
