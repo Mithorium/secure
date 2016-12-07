@@ -3,23 +3,28 @@
   package main
 
   import (
-      "net/http"
+    "fmt"
+    "log"
 
-      "github.com/unrolled/secure"  // or "gopkg.in/unrolled/secure.v1"
+    "github.com/valyala/fasthttp"
+    "github.com/mithorium/secure-fasthttp"
   )
 
-  var myHandler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-      w.Write([]byte("hello world"))
-  })
+  func requestHandler(ctx *fasthttp.RequestCtx) {
+    fmt.Fprintf(ctx, "Hello, world!\n")
+  }
 
   func main() {
-      secureMiddleware := secure.New(secure.Options{
-          AllowedHosts: []string{"www.example.com", "sub.example.com"},
-          SSLRedirect:  true,
-      })
+    secureMiddleware := secure.New(secure.Options{
+      FrameDeny:             true,
+      ContentTypeNosniff:    true,
+      BrowserXssFilter:      true,
+    })
 
-      app := secureMiddleware.Handler(myHandler)
-      http.ListenAndServe("127.0.0.1:3000", app)
+    secureHandler := secureMiddleware.Handler(requestHandler)
+    if err := fasthttp.ListenAndServe(":8080", secureHandler); err != nil {
+      log.Fatalf("Error in ListenAndServe: %s", err)
+    }
   }
 */
 package secure

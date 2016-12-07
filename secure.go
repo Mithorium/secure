@@ -2,7 +2,7 @@ package secure
 
 import (
 	"fmt"
-	"net/http"
+	"github.com/valyala/fasthttp"
 	"strings"
 )
 
@@ -20,8 +20,8 @@ const (
 	hpkpHeader          = "Public-Key-Pins"
 )
 
-func defaultBadHostHandler(w http.ResponseWriter, r *http.Request) {
-	http.Error(w, "Bad Host", http.StatusInternalServerError)
+func defaultBadHostHandler(ctx *fasthttp.RequestCtx) {
+	ctx.Error("Bad Host", fasthttp.StatusInternalServerError)
 }
 
 // Options is a struct for specifying configuration options for the secure.Secure middleware.
@@ -68,7 +68,7 @@ type Secure struct {
 	opt Options
 
 	// Handlers for when an error occurs (ie bad host).
-	badHostHandler http.Handler
+	badHostHandler fasthttp.RequestHandler
 }
 
 // New constructs a new Secure instance with supplied options.
@@ -82,64 +82,64 @@ func New(options ...Options) *Secure {
 
 	return &Secure{
 		opt:            o,
-		badHostHandler: http.HandlerFunc(defaultBadHostHandler),
+		badHostHandler: defaultBadHostHandler,
 	}
 }
 
 // SetBadHostHandler sets the handler to call when secure rejects the host name.
-func (s *Secure) SetBadHostHandler(handler http.Handler) {
+func (s *Secure) SetBadHostHandler(handler fasthttp.RequestHandler) {
 	s.badHostHandler = handler
 }
 
-// Handler implements the http.HandlerFunc for integration with the standard net/http lib.
-func (s *Secure) Handler(h http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+// Handler implements the fasthttp.RequestHandler for integration with the valyala/fasthttp lib.
+func (s *Secure) Handler(h fasthttp.RequestHandler) fasthttp.RequestHandler {
+	return func(ctx *fasthttp.RequestCtx) {
 		// Let secure process the request. If it returns an error,
 		// that indicates the request should not continue.
-		err := s.Process(w, r)
+		err := s.Process(ctx)
 
 		// If there was an error, do not continue.
 		if err != nil {
 			return
 		}
 
-		h.ServeHTTP(w, r)
-	})
+		h(ctx)
+	}
 }
 
-// HandlerFuncWithNext is a special implementation for Negroni, but could be used elsewhere.
-func (s *Secure) HandlerFuncWithNext(w http.ResponseWriter, r *http.Request, next http.HandlerFunc) {
-	err := s.Process(w, r)
+// TODO ctx only version to allow for hooks
+func (s *Secure) HandlerFuncWithNext(ctx *fasthttp.RequestCtx, next fasthttp.RequestHandler) {
+	err := s.Process(ctx)
 
 	// If there was an error, do not call next.
 	if err == nil && next != nil {
-		next(w, r)
+		next(ctx)
 	}
 }
 
 // Process runs the actual checks and returns an error if the middleware chain should stop.
-func (s *Secure) Process(w http.ResponseWriter, r *http.Request) error {
+func (s *Secure) Process(ctx *fasthttp.RequestCtx) error {
 	// Allowed hosts check.
 	if len(s.opt.AllowedHosts) > 0 && !s.opt.IsDevelopment {
 		isGoodHost := false
 		for _, allowedHost := range s.opt.AllowedHosts {
-			if strings.EqualFold(allowedHost, r.Host) {
+			if strings.EqualFold(allowedHost, string(ctx.Host())) {
 				isGoodHost = true
 				break
 			}
 		}
 
 		if !isGoodHost {
-			s.badHostHandler.ServeHTTP(w, r)
-			return fmt.Errorf("Bad host name: %s", r.Host)
+			s.badHostHandler(ctx)
+			return fmt.Errorf("Bad host name: %s", string(ctx.Host()))
 		}
 	}
 
 	// Determine if we are on HTTPS.
-	isSSL := strings.EqualFold(r.URL.Scheme, "https") || r.TLS != nil
+	isSSL := strings.EqualFold(string(ctx.URI().Scheme()), "https") || ctx.IsTLS()
 	if !isSSL {
 		for k, v := range s.opt.SSLProxyHeaders {
-			if r.Header.Get(k) == v {
+			if string(ctx.Request.Header.Peek(k)) == v {
 				isSSL = true
 				break
 			}
@@ -148,20 +148,19 @@ func (s *Secure) Process(w http.ResponseWriter, r *http.Request) error {
 
 	// SSL check.
 	if s.opt.SSLRedirect && !isSSL && !s.opt.IsDevelopment {
-		url := r.URL
-		url.Scheme = "https"
-		url.Host = r.Host
+		uri := ctx.URI()
+		uri.SetScheme("https")
 
 		if len(s.opt.SSLHost) > 0 {
-			url.Host = s.opt.SSLHost
+			uri.SetHost(s.opt.SSLHost)
 		}
 
-		status := http.StatusMovedPermanently
+		status := fasthttp.StatusMovedPermanently
 		if s.opt.SSLTemporaryRedirect {
-			status = http.StatusTemporaryRedirect
+			status = fasthttp.StatusTemporaryRedirect
 		}
 
-		http.Redirect(w, r, url.String(), status)
+		ctx.Redirect(uri.String(), status)
 		return fmt.Errorf("Redirecting to HTTPS")
 	}
 
@@ -177,34 +176,34 @@ func (s *Secure) Process(w http.ResponseWriter, r *http.Request) error {
 			stsSub += stsPreloadString
 		}
 
-		w.Header().Add(stsHeader, fmt.Sprintf("max-age=%d%s", s.opt.STSSeconds, stsSub))
+		ctx.Response.Header.Add(stsHeader, fmt.Sprintf("max-age=%d%s", s.opt.STSSeconds, stsSub))
 	}
 
 	// Frame Options header.
 	if len(s.opt.CustomFrameOptionsValue) > 0 {
-		w.Header().Add(frameOptionsHeader, s.opt.CustomFrameOptionsValue)
+		ctx.Response.Header.Add(frameOptionsHeader, s.opt.CustomFrameOptionsValue)
 	} else if s.opt.FrameDeny {
-		w.Header().Add(frameOptionsHeader, frameOptionsValue)
+		ctx.Response.Header.Add(frameOptionsHeader, frameOptionsValue)
 	}
 
 	// Content Type Options header.
 	if s.opt.ContentTypeNosniff {
-		w.Header().Add(contentTypeHeader, contentTypeValue)
+		ctx.Response.Header.Add(contentTypeHeader, contentTypeValue)
 	}
 
 	// XSS Protection header.
 	if s.opt.BrowserXssFilter {
-		w.Header().Add(xssProtectionHeader, xssProtectionValue)
+		ctx.Response.Header.Add(xssProtectionHeader, xssProtectionValue)
 	}
 
 	// HPKP header.
 	if len(s.opt.PublicKey) > 0 && isSSL && !s.opt.IsDevelopment {
-		w.Header().Add(hpkpHeader, s.opt.PublicKey)
+		ctx.Response.Header.Add(hpkpHeader, s.opt.PublicKey)
 	}
 
 	// Content Security Policy header.
 	if len(s.opt.ContentSecurityPolicy) > 0 {
-		w.Header().Add(cspHeader, s.opt.ContentSecurityPolicy)
+		ctx.Response.Header.Add(cspHeader, s.opt.ContentSecurityPolicy)
 	}
 
 	return nil

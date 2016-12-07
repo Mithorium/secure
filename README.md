@@ -1,6 +1,6 @@
-# Secure [![GoDoc](https://godoc.org/github.com/unrolled/secure?status.svg)](http://godoc.org/github.com/unrolled/secure) [![Build Status](https://travis-ci.org/unrolled/secure.svg)](https://travis-ci.org/unrolled/secure)
+# Secure-fasthttp [![GoDoc](https://godoc.org/github.com/mithorium/secure-fasthttp?status.svg)](http://godoc.org/github.com/mithorium/secure-fasthttp) [![Build Status](https://travis-ci.org/mithorium/secure-fasthttp.svg)](https://travis-ci.org/mithorium/secure-fasthttp)
 
-Secure is an HTTP middleware for Go that facilitates some quick security wins. It's a standard net/http [Handler](http://golang.org/pkg/net/http/#Handler), and can be used with many [frameworks](#integration-examples) or directly with Go's net/http package.
+Secure-fasthttp is a HTTP middleware for Go forked from [unrolled/secure](https://github.com/unrolled/secure) that facilitates some quick security wins. It is meant to be used with [valyala/fasthttp](https://github.com/valyala/fasthttp).
 
 ## Usage
 
@@ -9,14 +9,16 @@ Secure is an HTTP middleware for Go that facilitates some quick security wins. I
 package main
 
 import (
-    "net/http"
+    "fmt"
+    "log"
 
-    "github.com/unrolled/secure"  // or "gopkg.in/unrolled/secure.v1"
+    "github.com/valyala/fasthttp"
+    "github.com/mithorium/secure-fasthttp"
 )
 
-var myHandler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-    w.Write([]byte("hello world"))
-})
+func requestHandler(ctx *fasthttp.RequestCtx) {
+    fmt.Fprintf(ctx, "Hello, world!\n")
+}
 
 func main() {
     secureMiddleware := secure.New(secure.Options{
@@ -34,8 +36,10 @@ func main() {
         PublicKey:             `pin-sha256="base64+primary=="; pin-sha256="base64+backup=="; max-age=5184000; includeSubdomains; report-uri="https://www.example.com/hpkp-report"`,
     })
 
-    app := secureMiddleware.Handler(myHandler)
-    http.ListenAndServe("127.0.0.1:3000", app)
+    secureHandler := secureMiddleware.Handler(requestHandler)
+    if err := fasthttp.ListenAndServe(":8080", secureHandler); err != nil {
+        log.Fatalf("Error in ListenAndServe: %s", err)
+    }
 }
 ~~~
 
@@ -111,7 +115,9 @@ l := secure.New(secure.Options{
 ~~~
 Also note the default bad host handler throws an error:
 ~~~ go
-http.Error(w, "Bad Host", http.StatusInternalServerError)
+func defaultBadHostHandler(ctx *fasthttp.RequestCtx) {
+	ctx.Error("Bad Host", fasthttp.StatusInternalServerError)
+}
 ~~~
 Call `secure.SetBadHostHandler` to change the bad host handler.
 
@@ -123,15 +129,15 @@ If you want to redirect all HTTP requests to HTTPS, you can use the following ex
 package main
 
 import (
+    "fmt"
     "log"
-    "net/http"
-
-    "github.com/unrolled/secure"  // or "gopkg.in/unrolled/secure.v1"
+    "github.com/valyala/fasthttp"
+    "github.com/mithorium/secure-fasthttp"
 )
 
-var myHandler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-    w.Write([]byte("hello world"))
-})
+func requestHandler(ctx *fasthttp.RequestCtx) {
+    fmt.Fprintf(ctx, "Hello, world!\n")
+}
 
 func main() {
     secureMiddleware := secure.New(secure.Options{
@@ -139,17 +145,17 @@ func main() {
         SSLHost:     "localhost:8443", // This is optional in production. The default behavior is to just redirect the request to the HTTPS protocol. Example: http://github.com/some_page would be redirected to https://github.com/some_page.
     })
 
-    app := secureMiddleware.Handler(myHandler)
+    secureHandler := secureMiddleware.Handler(requestHandler)
 
     // HTTP
     go func() {
-        log.Fatal(http.ListenAndServe(":8080", app))
+        log.Fatal(fasthttp.ListenAndServe(":8080", secureHandler))
     }()
 
     // HTTPS
     // To generate a development cert and key, run the following from your *nix terminal:
     // go run $GOROOT/src/pkg/crypto/tls/generate_cert.go --host="localhost"
-    log.Fatal(http.ListenAndServeTLS(":8443", "cert.pem", "key.pem", app))
+    log.Fatal(fasthttp.ListenAndServeTLS(":8443", "cert.pem", "key.pem", secureHandler))
 }
 ~~~
 
@@ -160,173 +166,6 @@ The STS header will only be sent on verified HTTPS connections (and when `IsDeve
 
 ### Content Security Policy
 If you need dynamic support for CSP while using Websockets, check out this other middleware [awakenetworks/csp](https://github.com/awakenetworks/csp).  
-
-
-## Integration examples
-
-### [Echo](https://github.com/labstack/echo)
-~~~ go
-// main.go
-package main
-
-import (
-    "net/http"
-
-    "github.com/labstack/echo"
-    "github.com/unrolled/secure" // or "gopkg.in/unrolled/secure.v1"
-)
-
-func main() {
-    secureMiddleware := secure.New(secure.Options{
-        FrameDeny: true,
-    })
-
-    e := echo.New()
-
-    e.Get("/", func(c *echo.Context) error {
-        c.String(http.StatusOK, "X-Frame-Options header is now `DENY`.")
-        return nil
-    })
-    e.Use(secureMiddleware.Handler)
-
-    e.Run("127.0.0.1:3000")
-}
-~~~
-
-### [Gin](https://github.com/gin-gonic/gin)
-~~~ go
-// main.go
-package main
-
-import (
-    "github.com/gin-gonic/gin"
-    "github.com/unrolled/secure"  // or "gopkg.in/unrolled/secure.v1"
-)
-
-func main() {
-    secureMiddleware := secure.New(secure.Options{
-        FrameDeny: true,
-    })
-    secureFunc := func() gin.HandlerFunc {
-        return func(c *gin.Context) {
-            err := secureMiddleware.Process(c.Writer, c.Request)
-
-            // If there was an error, do not continue.
-            if err != nil {
-	    	c.Abort()
-                return
-            }
-	    
-	    // Avoid header rewrite if response is a redirection.
-	    if status := c.Writer.Status(); status > 300 && status < 399 {
-	    	c.Abort()
-            }
-        }
-    }()
-
-    router := gin.Default()
-    router.Use(secureFunc)
-
-    router.GET("/", func(c *gin.Context) {
-        c.String(200, "X-Frame-Options header is now `DENY`.")
-    })
-
-    router.Run("127.0.0.1:3000")
-}
-~~~
-
-### [Goji](https://github.com/zenazn/goji)
-~~~ go
-// main.go
-package main
-
-import (
-    "net/http"
-
-    "github.com/unrolled/secure"  // or "gopkg.in/unrolled/secure.v1"
-    "github.com/zenazn/goji"
-    "github.com/zenazn/goji/web"
-)
-
-func main() {
-    secureMiddleware := secure.New(secure.Options{
-        FrameDeny: true,
-    })
-
-    goji.Get("/", func(c web.C, w http.ResponseWriter, req *http.Request) {
-        w.Write([]byte("X-Frame-Options header is now `DENY`."))
-    })
-    goji.Use(secureMiddleware.Handler)
-    goji.Serve() // Defaults to ":8000".
-}
-~~~
-
-### [Iris](https://github.com/kataras/iris)
-~~~ go
-//main.go
-package main
-
-import (
-	"github.com/kataras/iris"
-	"github.com/unrolled/secure"
-)
-
-func main() {
-	secureMiddleware := secure.New(secure.Options{
-        FrameDeny: true,
-        })
-
-	iris.UseFunc(func(c *iris.Context) {
-		err := secureMiddleware.Process(c.ResponseWriter, c.Request)
-
-		// If there was an error, do not continue.
-		if err != nil {
-			return
-		}
-
-		c.Next()
-	})
-
-	iris.Get("/home", func(c *iris.Context) {
-		c.SendStatus(200,"X-Frame-Options header is now `DENY`.")
-	})
-
-	iris.Listen(":8080")
-
-}
-
-~~~~
-
-### [Negroni](https://github.com/codegangsta/negroni)
-Note this implementation has a special helper function called `HandlerFuncWithNext`.
-~~~ go
-// main.go
-package main
-
-import (
-    "net/http"
-
-    "github.com/codegangsta/negroni"
-    "github.com/unrolled/secure"  // or "gopkg.in/unrolled/secure.v1"
-)
-
-func main() {
-    mux := http.NewServeMux()
-    mux.HandleFunc("/", func(w http.ResponseWriter, req *http.Request) {
-        w.Write([]byte("X-Frame-Options header is now `DENY`."))
-    })
-
-    secureMiddleware := secure.New(secure.Options{
-        FrameDeny: true,
-    })
-
-    n := negroni.Classic()
-    n.Use(negroni.HandlerFunc(secureMiddleware.HandlerFuncWithNext))
-    n.UseHandler(mux)
-
-    n.Run("127.0.0.1:3000")
-}
-~~~
 
 ## Nginx
 If you would like to add the above security rules directly to your [Nginx](http://wiki.nginx.org/Main) configuration, everything is below:
